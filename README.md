@@ -9,7 +9,7 @@ NOTE: Up until now, CloudFormation resource is not available yet for MWAA.
 ### Deploy S3 buckets and Networking resources
 
 ```bash
-aws cloudformation deploy --template-file mwaa.yml --stack-name airflow-demo
+aws cloudformation deploy --template-file mwaa.yml --stack-name airflow-demo --capabilities CAPABILITY_NAMED_IAM
 ```
 
 ### Create environment from AWS Console

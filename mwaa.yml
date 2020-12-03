@@ -5,7 +5,7 @@ Parameters:
   EnvironmentName:
     Description: An environment name that is prefixed to resource names
     Type: String
-    Default: mwaa-demo
+    Default: airflow-demo
 
   VpcCIDR:
     Description: Please enter the IP range (CIDR notation) for this VPC
@@ -32,15 +32,119 @@ Parameters:
     Type: String
     Default: 10.192.21.0/24
 
+  DirsToCreate:
+    Description: "Comma delimited list of directories to create."
+    Type: CommaDelimitedList
+    Default: dags,plugins
+
 Resources:
 
   S3Bucket:
-    Type: 'AWS::S3::Bucket'
+    Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     Properties:
       BucketName: airflow-demo-codigube
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       VersioningConfiguration:
         Status: Enabled
+ 
+  # Credit: https://aws.amazon.com/premiumsupport/knowledge-center/cloudformation-s3-custom-resources/
+  S3CustomResource:
+    Type: Custom::S3CustomResource
+    Properties:
+      ServiceToken: !GetAtt AWSLambdaFunction.Arn
+      the_bucket: !Ref S3Bucket
+      dirs_to_create: !Ref DirsToCreate
+
+  AWSLambdaFunction:
+     Type: "AWS::Lambda::Function"
+     Properties:
+       Description: "Work with S3 Buckets!"
+       FunctionName: !Sub '${AWS::StackName}-${AWS::Region}-lambda'
+       Handler: index.handler
+       Role: !GetAtt AWSLambdaExecutionRole.Arn
+       Timeout: 360
+       Runtime: python3.6
+       Code:
+         ZipFile: |
+          import boto3
+          import cfnresponse
+          def handler(event, context):
+              # Init ...
+              the_event = event['RequestType']
+              print("The event is: ", str(the_event))
+              response_data = {}
+              s_3 = boto3.client('s3')
+              # Retrieve parameters
+              the_bucket = event['ResourceProperties']['the_bucket']
+              dirs_to_create = event['ResourceProperties']['dirs_to_create']
+              try:
+                  if the_event in ('Create', 'Update'):
+                      print("Requested folders: ", str(dirs_to_create))
+                      for dir_name in dirs_to_create:
+                          print("Creating: ", str(dir_name))
+                          s_3.put_object(Bucket=the_bucket,
+                                         Key=(dir_name
+                                              + '/'))
+                  elif the_event == 'Delete':
+                      print("Deleting S3 content...")
+                      b_operator = boto3.resource('s3')
+                      b_operator.Bucket(str(the_bucket)).objects.all().delete()
+                  # Everything OK... send the signal back
+                  print("Execution succesfull!")
+                  cfnresponse.send(event,
+                                   context,
+                                   cfnresponse.SUCCESS,
+                                   response_data)
+              except Exception as e:
+                  print("Execution failed...")
+                  print(str(e))
+                  response_data['Data'] = str(e)
+                  cfnresponse.send(event,
+                                   context,
+                                   cfnresponse.FAILED,
+                                   response_data)
+  AWSLambdaExecutionRole:
+     Type: AWS::IAM::Role
+     Properties:
+       AssumeRolePolicyDocument:
+         Statement:
+         - Action:
+           - sts:AssumeRole
+           Effect: Allow
+           Principal:
+             Service:
+             - lambda.amazonaws.com
+         Version: '2012-10-17'
+       Path: "/"
+       Policies:
+       - PolicyDocument:
+           Statement:
+           - Action:
+             - logs:CreateLogGroup
+             - logs:CreateLogStream
+             - logs:PutLogEvents
+             Effect: Allow
+             Resource: arn:aws:logs:*:*:*
+           Version: '2012-10-17'
+         PolicyName: !Sub ${AWS::StackName}-${AWS::Region}-AWSLambda-CW
+       - PolicyDocument:
+           Statement:
+           - Action:
+             - s3:PutObject
+             - s3:DeleteObject
+             - s3:List*
+             Effect: Allow
+             Resource:
+             - !Sub arn:aws:s3:::${S3Bucket}/*
+             - !Sub arn:aws:s3:::${S3Bucket}
+           Version: '2012-10-17'
+         PolicyName: !Sub ${AWS::StackName}-${AWS::Region}-AWSLambda-S3
+       RoleName: !Sub ${AWS::StackName}-${AWS::Region}-AWSLambdaExecutionRole
 
   VPC:
     Type: AWS::EC2::VPC
@@ -211,7 +315,73 @@ Resources:
       GroupDescription: "Security group with no ingress rule"
       VpcId: !Ref VPC
 
+  MwaaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - airflow.amazonaws.com
+              - airflow-env.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: '*'
+                Resource: '*'
+
+  # Reference: https://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/MWAA.html
+  AirflowEnvironment:
+    Type: AWS::MWAA::Environment
+    DependsOn:
+      - S3CustomResource
+      - AWSLambdaFunction
+      - NatGateway1
+      - NatGateway2
+    Properties:
+      Name: airflow-demo
+      NetworkConfiguration:
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        SecurityGroupIds:
+          - !Ref NoIngressSecurityGroup
+      LoggingConfiguration:
+        DagProcessingLogs:
+          Enabled: false
+          LogLevel: INFO
+        SchedulerLogs:
+          Enabled: false
+          LogLevel: INFO
+        TaskLogs:
+          Enabled: true
+          LogLevel: INFO
+        WebserverLogs:
+          Enabled: false
+          LogLevel: INFO
+        WorkerLogs:
+          Enabled: false
+          LogLevel: INFO
+      SourceBucketArn: !GetAtt S3Bucket.Arn
+      ExecutionRoleArn: !GetAtt MwaaRole.Arn
+      MaxWorkers: 1
+      DagS3Path: "./dags"
+      EnvironmentClass: mw1.small
+      WebserverAccessMode: PUBLIC_ONLY
+
 Outputs:
+  
+  DagBucket:
+    Description: A reference to the created S3 bucket for Airflow
+    Value: !Ref S3Bucket
+
   VPC:
     Description: A reference to the created VPC
     Value: !Ref VPC
