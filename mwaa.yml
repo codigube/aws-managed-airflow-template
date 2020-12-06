@@ -308,12 +308,29 @@ Resources:
       RouteTableId: !Ref PrivateRouteTable2
       SubnetId: !Ref PrivateSubnet2
 
-  NoIngressSecurityGroup:
+  MwaaVpcSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: "no-ingress-sg"
-      GroupDescription: "Security group with no ingress rule"
+      GroupName: "mwaa-ingress-sg"
+      GroupDescription: "Security Group for Amazon MWAA Environment"
       VpcId: !Ref VPC
+  
+  # The Security group allows inbound traffic from the same security group
+  # which means that all the components behind MWAA are using same security group.
+  MwaaVpcSecurityGroupInboundRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId:
+        Fn::GetAtt:
+        - MwaaVpcSecurityGroup
+        - GroupId
+      GroupId:
+        Fn::GetAtt:
+        - MwaaVpcSecurityGroup
+        - GroupId
 
   MwaaRole:
     Type: 'AWS::IAM::Role'
@@ -346,13 +363,13 @@ Resources:
       - NatGateway1
       - NatGateway2
     Properties:
-      Name: airflow-demo
+      Name: airflow-demo-1
       NetworkConfiguration:
         SubnetIds:
           - !Ref PrivateSubnet1
           - !Ref PrivateSubnet2
         SecurityGroupIds:
-          - !Ref NoIngressSecurityGroup
+          - !Ref MwaaVpcSecurityGroup
       LoggingConfiguration:
         DagProcessingLogs:
           Enabled: false
@@ -410,6 +427,6 @@ Outputs:
     Description: A reference to the private subnet in the 2nd Availability Zone
     Value: !Ref PrivateSubnet2
 
-  NoIngressSecurityGroup:
+  MwaaVpcSecurityGroup:
     Description: Security group with no ingress rule
-    Value: !Ref NoIngressSecurityGroup
+    Value: !Ref MwaaVpcSecurityGroup
