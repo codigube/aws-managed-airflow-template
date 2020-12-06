@@ -363,7 +363,7 @@ Resources:
       - NatGateway1
       - NatGateway2
     Properties:
-      Name: airflow-demo-1
+      Name: !Ref EnvironmentName
       NetworkConfiguration:
         SubnetIds:
           - !Ref PrivateSubnet1
