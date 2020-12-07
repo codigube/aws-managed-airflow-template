@@ -7,6 +7,11 @@ Parameters:
     Type: String
     Default: airflow-demo
 
+  AirflowBucketName:
+    Description: The bucket name of the Airflow environment which stores the DAGs, plugins, etc.
+    Type: String
+    Default: airflow-demo-bucket-codigube
+
   VpcCIDR:
     Description: Please enter the IP range (CIDR notation) for this VPC
     Type: String
@@ -43,7 +48,7 @@ Resources:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     Properties:
-      BucketName: airflow-demo-codigube
+      BucketName: !Ref AirflowBucketName
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
